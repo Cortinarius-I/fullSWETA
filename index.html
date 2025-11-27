@@ -367,6 +367,17 @@
         }
         .notif-banner.show { display: block; }
 
+        .test-status {
+            background: rgba(9, 132, 227, 0.15);
+            border: 2px solid rgba(9, 132, 227, 0.3);
+            border-radius: 10px;
+            padding: 10px;
+            margin: 10px 0;
+            font-size: 12px;
+            color: #0984e3;
+            text-align: center;
+        }
+
         @media (max-width: 480px) {
             body { padding: 0; }
             .container { border-radius: 0; height: 100vh; height: 100dvh; max-height: none; border: none; }
@@ -443,7 +454,21 @@
             <span id="notifStatusText">Checking...</span>
         </div>
         <button class="btn btn-success btn-small" onclick="subscribeToPush()">🔔 Enable Push Notifications</button>
-        <button class="btn btn-small" id="testModeBtn" onclick="toggleTestMode()">🧪 Start Test Mode (15s intervals)</button>
+        
+        <div class="divider">~ ♡ Test Notifications ♡ ~</div>
+        <div class="test-status" id="testStatus" style="display: none;">
+            🧪 Test mode active - server push every ~1 minute
+        </div>
+        <button class="btn btn-small" id="testModeBtn" onclick="toggleTestMode()">🧪 Start Test Mode</button>
+        <button class="btn btn-secondary btn-small" style="margin-top: 5px;" onclick="sendSingleTestPush()">📤 Send Single Test Push</button>
+        <div class="info-box warning" style="margin-top: 10px;">
+            <h3>🧪 How to Test Background Notifications</h3>
+            <p>1. Make sure push is enabled (green dot above)<br>
+            2. Tap "Send Single Test Push"<br>
+            3. <strong>Immediately close the app</strong><br>
+            4. You should receive a notification in ~5 seconds!<br><br>
+            "Start Test Mode" sends server pushes every ~1 minute (even with app closed). Auto-stops after 10 minutes.</p>
+        </div>
         
         <div class="info-box success" id="pushEnabledBox" style="display: none;">
             <h3>✅ Background Notifications Enabled!</h3>
@@ -549,7 +574,7 @@
 
     <script>
         // =====================================================
-        // SWETA v3.0.0 - With Background Push Notifications
+        // SWETA v3.1.0 - Server-side Test Push
         // =====================================================
 
         // VAPID Public Key - REPLACE WITH YOUR OWN FROM CLOUDFLARE WORKER
@@ -579,12 +604,14 @@
             isOnline: navigator.onLine,
             swRegistration: null,
             pushSubscription: null,
+            // Test mode - persisted
             testMode: false,
-            testMessageIds: []
+            testMessageIds: [],
+            testCount: 0
         };
 
-        let testModeInterval = null;
         let appJustOpened = true;
+        let subscriptionCheckComplete = false; // Flag to track if we've checked subscription
 
         // =====================================================
         // Initialization
@@ -592,14 +619,14 @@
 
         document.addEventListener('DOMContentLoaded', async () => {
             loadState();
-            checkNotificationPermission();
+            loadTestModeState(); // Load test mode separately
             await registerServiceWorker();
             initializeApp();
             setupEventListeners();
             updateOnlineStatus();
         });
 
-        function initializeApp() {
+        async function initializeApp() {
             if (!state.isSetupComplete) {
                 document.getElementById('setupPanel').classList.add('show');
                 document.getElementById('mainContainer').style.display = 'none';
@@ -609,8 +636,14 @@
                 loadChatHistory();
                 startScheduler();
                 updateStats();
+                
+                // Check subscription FIRST, then show banner based on result
+                await checkPushSubscription();
+                subscriptionCheckComplete = true;
                 showNotificationBannerIfNeeded();
-                checkPushSubscription();
+                
+                // Restore test mode if it was active
+                restoreTestMode();
             }
             updateCurrentTime();
             setInterval(updateCurrentTime, 1000);
@@ -651,6 +684,7 @@
                 const permission = await Notification.requestPermission();
                 if (permission !== 'granted') {
                     addSystemMessage('❌ Please allow notifications to enable push.');
+                    checkNotificationPermission();
                     return;
                 }
 
@@ -709,6 +743,9 @@
                 
                 if (subscription) {
                     document.getElementById('pushEnabledBox').style.display = 'block';
+                    console.log('✅ Found existing push subscription');
+                } else {
+                    console.log('ℹ️ No push subscription found');
                 }
                 
                 checkNotificationPermission();
@@ -730,7 +767,6 @@
 
         function handlePushMessage(payload) {
             console.log('📨 Push message received in app:', payload);
-            // The notification is shown by the SW, but we can also update the UI
             if (payload.type === 'hourly') {
                 state.ignoredCount++;
                 state.lastCheckTime = new Date().toISOString();
@@ -739,54 +775,184 @@
         }
 
         // =====================================================
-        // Test Mode - 15 second intervals
+        // Test Mode - Server-side push notifications
         // =====================================================
 
-        function toggleTestMode() {
-            state.testMode = !state.testMode;
-            const btn = document.getElementById('testModeBtn');
+        function saveTestModeState() {
+            localStorage.setItem('sweta_test_mode', JSON.stringify({
+                testMode: state.testMode,
+                testMessageIds: state.testMessageIds,
+                testCount: state.testCount
+            }));
+        }
 
-            if (state.testMode) {
-                btn.textContent = '🛑 Stop Test Mode';
-                btn.classList.add('btn-active');
-                addTestMessage('🧪 Test mode started! You\'ll receive test notifications every 15 seconds.');
-                
-                // Send first test notification immediately
-                sendTestNotification();
-                
-                // Then every 15 seconds
-                testModeInterval = setInterval(sendTestNotification, 15000);
-            } else {
-                btn.textContent = '🧪 Start Test Mode (15s intervals)';
-                btn.classList.remove('btn-active');
-                
-                if (testModeInterval) {
-                    clearInterval(testModeInterval);
-                    testModeInterval = null;
-                }
-                
-                // Remove all test messages
-                removeTestMessages();
-                addSystemMessage('✅ Test mode stopped. Test messages cleared.');
+        function loadTestModeState() {
+            const saved = localStorage.getItem('sweta_test_mode');
+            if (saved) {
+                const data = JSON.parse(saved);
+                state.testMode = data.testMode || false;
+                state.testMessageIds = data.testMessageIds || [];
+                state.testCount = data.testCount || 0;
             }
         }
 
-        async function sendTestNotification() {
-            const testNum = state.testMessageIds.length + 1;
+        function restoreTestMode() {
+            if (state.testMode) {
+                console.log('🧪 Test mode was active - updating UI');
+                updateTestModeUI(true);
+                addTestMessage('🧪 Test mode is still running on server!');
+                addTestMessage('💡 You should be receiving notifications every ~1 minute.');
+            }
+        }
+
+        function updateTestModeUI(active) {
+            const btn = document.getElementById('testModeBtn');
+            const status = document.getElementById('testStatus');
+            
+            if (active) {
+                btn.textContent = '🛑 Stop Test Mode';
+                btn.classList.add('btn-active');
+                if (status) status.style.display = 'block';
+            } else {
+                btn.textContent = '🧪 Start Test Mode (15s intervals)';
+                btn.classList.remove('btn-active');
+                if (status) status.style.display = 'none';
+            }
+        }
+
+        async function toggleTestMode() {
+            if (!state.pushSubscription) {
+                addSystemMessage('⚠️ Please enable push notifications first!');
+                return;
+            }
+            
+            state.testMode = !state.testMode;
+            
+            if (state.testMode) {
+                // Starting test mode
+                state.testCount = 0;
+                state.testMessageIds = [];
+                updateTestModeUI(true);
+                addTestMessage('🧪 Test mode started!');
+                addTestMessage('📡 Server will send push notifications every ~1 minute.');
+                addTestMessage('💡 Close the app now - you\'ll still receive notifications!');
+                addTestMessage('⏱️ Auto-stops after 10 minutes.');
+                
+                // Tell server to start sending
+                await startServerTestMode();
+                
+                saveTestModeState();
+                console.log('🧪 Test mode started');
+            } else {
+                // Stopping test mode
+                updateTestModeUI(false);
+                
+                // Tell server to stop sending
+                await stopServerTestMode();
+                
+                // Remove all test messages from UI
+                removeTestMessages();
+                addSystemMessage('✅ Test mode stopped. Test messages cleared.');
+                
+                state.testMessageIds = [];
+                state.testCount = 0;
+                saveTestModeState();
+                console.log('🧪 Test mode stopped');
+            }
+        }
+
+        async function sendSingleTestPush() {
+            if (!state.pushSubscription) {
+                addSystemMessage('⚠️ Please enable push notifications first!');
+                return;
+            }
+            
+            addTestMessage('📤 Sending test push via server... Close the app now to test background delivery!');
+            
+            try {
+                await sendServerTestPush();
+                addTestMessage('✅ Test push sent! If you close the app, you should still receive it.');
+            } catch (error) {
+                addTestMessage('❌ Failed to send: ' + error.message);
+            }
+        }
+
+        async function sendServerTestPush() {
+            if (!state.scriptUrl || !state.pushSubscription) {
+                console.log('⚠️ Cannot send server push - missing scriptUrl or subscription');
+                return;
+            }
+            
+            state.testCount++;
+            const testNum = state.testCount;
             const timestamp = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
             
-            addTestMessage(`🧪 Test #${testNum} at ${timestamp} - If you see this, notifications work!`);
+            console.log(`🧪 Requesting server test push #${testNum}`);
             
-            // Send actual push notification
-            if (state.swRegistration && Notification.permission === 'granted') {
-                await state.swRegistration.showNotification('SWETA Test 🧪', {
-                    body: `Test notification #${testNum} at ${timestamp}`,
-                    icon: './icon-192.png',
-                    badge: './icon-72.png',
-                    tag: 'sweta-test-' + testNum,
-                    requireInteraction: false,
-                    silent: false
+            const data = {
+                action: 'sendTestPush',
+                userName: state.userName,
+                testNum: testNum,
+                timestamp: timestamp,
+                subscription: JSON.stringify(state.pushSubscription)
+            };
+            
+            try {
+                await fetch(state.scriptUrl, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
                 });
+                console.log('✅ Server test push requested');
+                saveTestModeState();
+            } catch (error) {
+                console.error('❌ Failed to request server push:', error);
+                throw error;
+            }
+        }
+
+        async function startServerTestMode() {
+            if (!state.scriptUrl) return;
+            
+            const data = {
+                action: 'startTestMode',
+                userName: state.userName,
+                subscription: JSON.stringify(state.pushSubscription),
+                intervalSeconds: 15
+            };
+            
+            try {
+                await fetch(state.scriptUrl, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                console.log('✅ Server test mode started');
+            } catch (error) {
+                console.error('❌ Failed to start server test mode:', error);
+            }
+        }
+
+        async function stopServerTestMode() {
+            if (!state.scriptUrl) return;
+            
+            const data = {
+                action: 'stopTestMode',
+                userName: state.userName
+            };
+            
+            try {
+                await fetch(state.scriptUrl, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                console.log('✅ Server test mode stopped');
+            } catch (error) {
+                console.error('❌ Failed to stop server test mode:', error);
             }
         }
 
@@ -814,6 +980,7 @@
         }
 
         function removeTestMessages() {
+            console.log('🧹 Removing', state.testMessageIds.length, 'test messages');
             state.testMessageIds.forEach(id => {
                 const el = document.getElementById(id);
                 if (el) el.remove();
@@ -862,13 +1029,26 @@
         }
 
         function showNotificationBannerIfNeeded() {
+            // Only show banner after we've actually checked the subscription status
+            if (!subscriptionCheckComplete) {
+                console.log('⏳ Subscription check not complete yet, skipping banner');
+                return;
+            }
+            
             const permission = ('Notification' in window) ? Notification.permission : 'unsupported';
             const hasPush = !!state.pushSubscription;
             
-            if (permission !== 'granted' || !hasPush) {
-                document.getElementById('notifBanner')?.classList.add('show');
-            } else {
+            console.log('🔔 Banner check - Permission:', permission, 'Has push:', hasPush);
+            
+            if (permission === 'granted' && hasPush) {
+                // User has everything set up - hide banner
                 document.getElementById('notifBanner')?.classList.remove('show');
+            } else if (permission === 'denied') {
+                // User denied - hide banner (they need to change browser settings)
+                document.getElementById('notifBanner')?.classList.remove('show');
+            } else {
+                // Show banner - user needs to enable
+                document.getElementById('notifBanner')?.classList.add('show');
             }
         }
 
@@ -955,6 +1135,10 @@
             
             addBotMessage(`안녕하세요 ${state.userName}! 💜 I'm SWETA! I'll help you track your work. 화이팅! 💪\n\nPlease tap the notification banner to enable push notifications for reminders even when the app is closed!`);
             
+            // Show banner after setup
+            subscriptionCheckComplete = true;
+            showNotificationBannerIfNeeded();
+            
             startScheduler();
         }
 
@@ -972,14 +1156,16 @@
             updateStats();
             checkNotificationPermission();
             checkPushSubscription();
+            
+            // Update test mode button to reflect current state
+            updateTestModeUI(state.testMode);
+            
             document.getElementById('configPanel').classList.add('show');
         }
 
         function closeSettings() { 
-            // Stop test mode if active
-            if (state.testMode) {
-                toggleTestMode();
-            }
+            // DON'T stop test mode when closing settings!
+            // Test mode should persist.
             document.getElementById('configPanel').classList.remove('show'); 
         }
 
@@ -1005,6 +1191,10 @@
 
         function clearAllData() {
             if (confirm('Clear ALL data? This cannot be undone!')) {
+                // Stop server test mode if active
+                if (state.testMode) {
+                    stopServerTestMode();
+                }
                 localStorage.clear();
                 location.reload();
             }
@@ -1082,10 +1272,15 @@
             });
             window.addEventListener('online', updateOnlineStatus);
             window.addEventListener('offline', updateOnlineStatus);
+            
+            // Only update notification status on visibility change, don't show banner
             document.addEventListener('visibilitychange', () => { 
                 if (!document.hidden) {
                     checkNotificationPermission();
-                    showNotificationBannerIfNeeded();
+                    // Re-check subscription when app becomes visible
+                    checkPushSubscription().then(() => {
+                        showNotificationBannerIfNeeded();
+                    });
                 }
             });
         }
