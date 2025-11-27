@@ -34,10 +34,6 @@ function doPost(e) {
         return jsonResponse(getTasks(data.userName, data.date));
       case 'sendTestPush':
         return jsonResponse(sendTestPush(data));
-      case 'startTestMode':
-        return jsonResponse(startTestMode(data));
-      case 'stopTestMode':
-        return jsonResponse(stopTestMode(data));
       default:
         return jsonResponse({ error: 'Unknown action' });
     }
@@ -477,121 +473,6 @@ function sendTestPush(data) {
   } catch (error) {
     console.error('Test push error:', error);
     return { success: false, error: error.message };
-  }
-}
-
-function startTestMode(data) {
-  const userName = data.userName;
-  const subscription = data.subscription;
-  
-  // Store test mode state
-  const props = PropertiesService.getScriptProperties();
-  props.setProperty('testMode_' + userName, JSON.stringify({
-    active: true,
-    subscription: subscription,
-    startedAt: new Date().toISOString(),
-    count: 0
-  }));
-  
-  // Create a trigger to send test pushes every minute (minimum GAS allows)
-  // First, delete any existing test triggers for this user
-  deleteTestTriggers();
-  
-  // Create new trigger
-  ScriptApp.newTrigger('runTestModePush')
-    .timeBased()
-    .everyMinutes(1)
-    .create();
-  
-  console.log('Test mode started for', userName);
-  return { success: true, message: 'Test mode started - pushes every 1 minute from server' };
-}
-
-function stopTestMode(data) {
-  const userName = data.userName;
-  
-  // Clear test mode state
-  const props = PropertiesService.getScriptProperties();
-  props.deleteProperty('testMode_' + userName);
-  
-  // Delete test triggers
-  deleteTestTriggers();
-  
-  console.log('Test mode stopped for', userName);
-  return { success: true, message: 'Test mode stopped' };
-}
-
-function deleteTestTriggers() {
-  const triggers = ScriptApp.getProjectTriggers();
-  for (const trigger of triggers) {
-    if (trigger.getHandlerFunction() === 'runTestModePush') {
-      ScriptApp.deleteTrigger(trigger);
-    }
-  }
-}
-
-function runTestModePush() {
-  // This runs every minute when test mode is active
-  const props = PropertiesService.getScriptProperties();
-  const allProps = props.getProperties();
-  
-  let anyActive = false;
-  
-  for (const key in allProps) {
-    if (key.startsWith('testMode_')) {
-      const testState = JSON.parse(allProps[key]);
-      
-      if (testState.active) {
-        anyActive = true;
-        testState.count++;
-        
-        const subscription = JSON.parse(testState.subscription);
-        const timestamp = new Date().toLocaleTimeString('en-IN', { 
-          hour: '2-digit', 
-          minute: '2-digit', 
-          second: '2-digit',
-          timeZone: 'Asia/Kolkata'
-        });
-        
-        const payload = {
-          subscription: subscription,
-          notification: {
-            title: 'SWETA Test 🧪 (Server)',
-            body: `Server push #${testState.count} at ${timestamp} - App is closed but you got this!`,
-            type: 'test'
-          }
-        };
-        
-        try {
-          const options = {
-            method: 'POST',
-            contentType: 'application/json',
-            payload: JSON.stringify(payload),
-            muteHttpExceptions: true
-          };
-          
-          UrlFetchApp.fetch(CLOUDFLARE_WORKER_URL + '/send', options);
-          console.log('Sent test push #' + testState.count);
-          
-          // Update count
-          props.setProperty(key, JSON.stringify(testState));
-        } catch (error) {
-          console.error('Failed to send test push:', error);
-        }
-        
-        // Auto-stop after 10 pushes (10 minutes) to prevent runaway
-        if (testState.count >= 10) {
-          console.log('Auto-stopping test mode after 10 pushes');
-          testState.active = false;
-          props.setProperty(key, JSON.stringify(testState));
-        }
-      }
-    }
-  }
-  
-  // If no active test modes, delete the trigger
-  if (!anyActive) {
-    deleteTestTriggers();
   }
 }
 

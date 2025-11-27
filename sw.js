@@ -3,7 +3,7 @@
 // With Push Notification Support
 // =====================================================
 
-const CACHE_NAME = 'sweta-v3.1.1';
+const CACHE_NAME = 'sweta-v3.2.0';
 
 const STATIC_ASSETS = [
     './',
