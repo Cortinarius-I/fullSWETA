@@ -457,18 +457,19 @@
         
         <div class="divider">~ ♡ Test Notifications ♡ ~</div>
         <div class="test-status" id="testStatus" style="display: none;">
-            🧪 Test mode active - server push every ~1 minute
+            🧪 Test mode active - local notifications every 15 seconds
         </div>
-        <button class="btn btn-small" id="testModeBtn" onclick="toggleTestMode()">🧪 Start Test Mode</button>
-        <button class="btn btn-secondary btn-small" style="margin-top: 5px;" onclick="sendSingleTestPush()">📤 Send Single Test Push</button>
-        <div class="info-box warning" style="margin-top: 10px;">
-            <h3>🧪 How to Test Background Notifications</h3>
-            <p>1. Make sure push is enabled (green dot above)<br>
-            2. Tap "Send Single Test Push"<br>
-            3. <strong>Immediately close the app</strong><br>
-            4. You should receive a notification in ~5 seconds!<br><br>
-            "Start Test Mode" sends server pushes every ~1 minute (even with app closed). Auto-stops after 10 minutes.</p>
+        <button class="btn btn-small" id="testModeBtn" onclick="toggleTestMode()">🧪 Start Test Mode (15s)</button>
+        <button class="btn btn-secondary btn-small" style="margin-top: 5px;" onclick="sendLocalTestNotification()">🔔 Send Single Local Test</button>
+        
+        <div class="info-box" style="margin-top: 10px;">
+            <h3>📋 Testing Steps</h3>
+            <p><strong>Step 1:</strong> Tap "Send Single Local Test" - you should see a notification immediately.<br><br>
+            <strong>Step 2:</strong> Start Test Mode, then minimize the app (don't close it). You should get notifications every 15 seconds.<br><br>
+            <strong>Step 3:</strong> Once Cloudflare Worker is set up, use the button below to test background push (works when app is fully closed).</p>
         </div>
+        
+        <button class="btn btn-secondary btn-small" style="margin-top: 10px;" onclick="sendServerTestPush()">📤 Test Server Push (requires Cloudflare)</button>
         
         <div class="info-box success" id="pushEnabledBox" style="display: none;">
             <h3>✅ Background Notifications Enabled!</h3>
@@ -574,7 +575,7 @@
 
     <script>
         // =====================================================
-        // SWETA v3.1.0 - Server-side Test Push
+        // SWETA v3.1.1 - Fixed test mode persistence + worker
         // =====================================================
 
         // VAPID Public Key - REPLACE WITH YOUR OWN FROM CLOUDFLARE WORKER
@@ -618,15 +619,19 @@
         // =====================================================
 
         document.addEventListener('DOMContentLoaded', async () => {
+            console.log('🚀 SWETA starting...');
             loadState();
             loadTestModeState(); // Load test mode separately
+            console.log('📊 State loaded, testMode =', state.testMode);
             await registerServiceWorker();
             initializeApp();
             setupEventListeners();
             updateOnlineStatus();
+            console.log('✅ SWETA initialized');
         });
 
         async function initializeApp() {
+            console.log('🔧 initializeApp, isSetupComplete =', state.isSetupComplete);
             if (!state.isSetupComplete) {
                 document.getElementById('setupPanel').classList.add('show');
                 document.getElementById('mainContainer').style.display = 'none';
@@ -643,6 +648,7 @@
                 showNotificationBannerIfNeeded();
                 
                 // Restore test mode if it was active
+                console.log('🔧 About to call restoreTestMode, testMode =', state.testMode);
                 restoreTestMode();
             }
             updateCurrentTime();
@@ -779,26 +785,37 @@
         // =====================================================
 
         function saveTestModeState() {
-            localStorage.setItem('sweta_test_mode', JSON.stringify({
+            const data = {
                 testMode: state.testMode,
                 testMessageIds: state.testMessageIds,
                 testCount: state.testCount
-            }));
+            };
+            localStorage.setItem('sweta_test_mode', JSON.stringify(data));
+            console.log('💾 Saved test mode state:', data);
         }
 
         function loadTestModeState() {
-            const saved = localStorage.getItem('sweta_test_mode');
-            if (saved) {
-                const data = JSON.parse(saved);
-                state.testMode = data.testMode || false;
-                state.testMessageIds = data.testMessageIds || [];
-                state.testCount = data.testCount || 0;
+            try {
+                const saved = localStorage.getItem('sweta_test_mode');
+                console.log('📂 Loading test mode state, raw:', saved);
+                if (saved) {
+                    const data = JSON.parse(saved);
+                    state.testMode = data.testMode === true; // Explicit boolean
+                    state.testMessageIds = data.testMessageIds || [];
+                    state.testCount = data.testCount || 0;
+                    console.log('✅ Loaded test mode state:', { testMode: state.testMode, testCount: state.testCount });
+                } else {
+                    console.log('ℹ️ No saved test mode state');
+                }
+            } catch (e) {
+                console.error('❌ Error loading test mode state:', e);
             }
         }
 
         function restoreTestMode() {
-            if (state.testMode) {
-                console.log('🧪 Test mode was active - updating UI');
+            console.log('🔄 restoreTestMode called, testMode =', state.testMode);
+            if (state.testMode === true) {
+                console.log('🧪 Restoring test mode UI...');
                 updateTestModeUI(true);
                 addTestMessage('🧪 Test mode is still running on server!');
                 addTestMessage('💡 You should be receiving notifications every ~1 minute.');
@@ -827,6 +844,10 @@
             }
             
             state.testMode = !state.testMode;
+            console.log('🔄 Test mode toggled to:', state.testMode);
+            
+            // Save immediately BEFORE any async operations
+            saveTestModeState();
             
             if (state.testMode) {
                 // Starting test mode
@@ -838,11 +859,13 @@
                 addTestMessage('💡 Close the app now - you\'ll still receive notifications!');
                 addTestMessage('⏱️ Auto-stops after 10 minutes.');
                 
+                // Save again with updated count/messages
+                saveTestModeState();
+                
                 // Tell server to start sending
                 await startServerTestMode();
                 
-                saveTestModeState();
-                console.log('🧪 Test mode started');
+                console.log('🧪 Test mode fully started');
             } else {
                 // Stopping test mode
                 updateTestModeUI(false);
@@ -857,7 +880,7 @@
                 state.testMessageIds = [];
                 state.testCount = 0;
                 saveTestModeState();
-                console.log('🧪 Test mode stopped');
+                console.log('🧪 Test mode fully stopped');
             }
         }
 
@@ -1147,6 +1170,7 @@
         // =====================================================
 
         function openSettings() {
+            console.log('⚙️ Opening settings, testMode =', state.testMode);
             document.getElementById('configName').value = state.userName;
             document.getElementById('configStartTime').value = state.startTime;
             document.getElementById('configEndTime').value = state.endTime;
@@ -1273,11 +1297,22 @@
             window.addEventListener('online', updateOnlineStatus);
             window.addEventListener('offline', updateOnlineStatus);
             
-            // Only update notification status on visibility change, don't show banner
+            // Save state when app is about to close
+            window.addEventListener('beforeunload', () => {
+                console.log('👋 App closing, saving state...');
+                saveState();
+                saveTestModeState();
+            });
+            
+            // Also save on visibility change (when app goes to background)
             document.addEventListener('visibilitychange', () => { 
-                if (!document.hidden) {
+                if (document.hidden) {
+                    console.log('👀 App hidden, saving state...');
+                    saveState();
+                    saveTestModeState();
+                } else {
+                    console.log('👀 App visible, checking subscription...');
                     checkNotificationPermission();
-                    // Re-check subscription when app becomes visible
                     checkPushSubscription().then(() => {
                         showNotificationBannerIfNeeded();
                     });
