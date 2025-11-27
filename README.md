@@ -2,14 +2,7 @@
 
 **Shitty Work Executive Tracking Assistant**
 
-A K-pop themed PWA that tracks your work with hourly check-ins, now with **real background push notifications** that work even when the app is closed!
-
-## ✨ What's New in v3.0
-
-- 🔔 **True Background Notifications** - Works even when app is fully closed!
-- 🧪 **Test Mode** - Toggle 15-second test notifications to verify setup
-- ☁️ **Cloudflare Workers** - Free push notification delivery
-- ⏰ **Google Apps Script Triggers** - Free scheduled notifications
+A K-pop themed PWA that tracks your work with hourly check-ins
 
 ## 🏗️ Architecture
 
@@ -31,7 +24,7 @@ A K-pop themed PWA that tracks your work with hourly check-ins, now with **real 
 
 ## 📋 Setup Guide
 
-### Step 1: Deploy Cloudflare Worker (5 minutes)
+### Step 1: Deploy Cloudflare Worker
 
 1. **Create Cloudflare Account**
    - Go to [workers.cloudflare.com](https://workers.cloudflare.com)
@@ -127,18 +120,6 @@ A K-pop themed PWA that tracks your work with hourly check-ins, now with **real 
    - Or tap menu → "Add to Home Screen"
 
 ## 🧪 Testing Your Setup
-
-### Test Push Notifications Work
-
-1. Open Settings in SWETA
-2. Tap "🧪 Start Test Mode (15s intervals)"
-3. You should see:
-   - Blue test messages appearing in chat every 15 seconds
-   - Push notifications appearing on your phone
-4. Tap "🛑 Stop Test Mode" when done
-   - All test messages will be removed from chat
-
-### Test Background Notifications
 
 1. Enable push notifications in the app
 2. **Fully close the app** (swipe it away)
