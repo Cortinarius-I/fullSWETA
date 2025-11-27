@@ -1,4 +1,4 @@
-# SWETA v3.0.0 - With Background Push Notifications! 🎉
+# SWETA v3.0
 
 **Shitty Work Executive Tracking Assistant**
 
@@ -266,9 +266,5 @@ You'd need 1000+ active users to approach any limits!
 - `cloudflare-worker.js` - Push notification sender
 - `icon-*.png` - App icons (10 sizes)
 - `README.md` - This file
-
-## 💜 Credits
-
-Made with love for tracking work in the most adorable way possible!
 
 화이팅! 💪
