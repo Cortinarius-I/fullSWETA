@@ -472,7 +472,15 @@
         </div>
         <div class="form-group">
             <label>Check-in Interval (minutes)</label>
-            <input type="number" class="form-input" id="configInterval" value="60" min="15" max="120">
+            <select class="form-input" id="configInterval">
+                <option value="15">15 minutes</option>
+                <option value="30">30 minutes</option>
+                <option value="45">45 minutes</option>
+                <option value="60" selected>60 minutes (1 hour)</option>
+                <option value="90">90 minutes (1.5 hours)</option>
+                <option value="120">120 minutes (2 hours)</option>
+            </select>
+            <small style="color: #b388ff; font-size: 11px;">How often you want check-in reminders</small>
         </div>
 
         <div class="divider">~ ♡ Integration ♡ ~</div>
@@ -1045,7 +1053,17 @@
         function loadChatHistory() {
             const container = document.getElementById('chatContainer');
             container.innerHTML = '';
-            state.chatHistory.slice(-50).forEach(msg => {
+            
+            // Sort by timestamp to ensure correct order
+            const sortedHistory = [...state.chatHistory].sort((a, b) => {
+                return new Date(a.timestamp) - new Date(b.timestamp);
+            });
+            
+            // Update state with sorted history
+            state.chatHistory = sortedHistory;
+            
+            // Display last 50 messages
+            sortedHistory.slice(-50).forEach(msg => {
                 addMessageToUI(msg.text, msg.sender, msg.timestamp, false);
             });
             scrollToBottom();
