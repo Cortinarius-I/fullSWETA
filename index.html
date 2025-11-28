@@ -560,7 +560,7 @@
 
     <script>
         // =====================================================
-        // SWETA v3.2.0 - Simplified test, no duplicate welcome
+        // SWETA v3.3.0 - Push messages now appear in chat
         // =====================================================
 
         // VAPID Public Key - REPLACE WITH YOUR OWN FROM CLOUDFLARE WORKER
@@ -648,10 +648,49 @@
                     if (event.data?.type === 'PUSH_RECEIVED') {
                         handlePushMessage(event.data.payload);
                     }
+                    if (event.data?.type === 'PENDING_MESSAGES') {
+                        handlePendingMessages(event.data.messages);
+                    }
                 });
+                
+                // Request any pending messages that arrived while app was closed
+                requestPendingMessages();
+                
             } catch (error) {
                 console.error('❌ SW registration failed:', error);
             }
+        }
+        
+        function requestPendingMessages() {
+            if (navigator.serviceWorker.controller) {
+                console.log('📬 Requesting pending messages from SW...');
+                navigator.serviceWorker.controller.postMessage({ type: 'GET_PENDING_MESSAGES' });
+            }
+        }
+        
+        function handlePendingMessages(messages) {
+            if (!messages || messages.length === 0) {
+                console.log('📭 No pending messages');
+                return;
+            }
+            
+            console.log('📬 Received', messages.length, 'pending messages');
+            
+            messages.forEach(msg => {
+                // Check if message already exists in history (by timestamp)
+                const exists = state.chatHistory.some(h => h.timestamp === msg.timestamp);
+                if (!exists) {
+                    state.chatHistory.push({
+                        text: msg.text,
+                        sender: msg.sender,
+                        timestamp: msg.timestamp
+                    });
+                    addMessageToUI(msg.text, msg.sender, msg.timestamp, false);
+                }
+            });
+            
+            saveState();
+            scrollToBottom();
         }
 
         async function subscribeToPush() {
@@ -748,6 +787,20 @@
 
         function handlePushMessage(payload) {
             console.log('📨 Push message received in app:', payload);
+            
+            // Add the message to chat
+            if (payload.body) {
+                const timestamp = new Date().toISOString();
+                // Check if already exists (from pending messages)
+                const exists = state.chatHistory.some(h => 
+                    h.text === payload.body && 
+                    Math.abs(new Date(h.timestamp) - new Date(timestamp)) < 5000
+                );
+                if (!exists) {
+                    addBotMessage(payload.body);
+                }
+            }
+            
             if (payload.type === 'hourly') {
                 state.ignoredCount++;
                 state.lastCheckTime = new Date().toISOString();

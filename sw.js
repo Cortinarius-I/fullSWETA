@@ -1,9 +1,11 @@
 // =====================================================
-// SWETA PWA Service Worker v3.0.0
-// With Push Notification Support
+// SWETA PWA Service Worker v3.3.0
+// With Push Notification Support + Message Persistence
 // =====================================================
 
-const CACHE_NAME = 'sweta-v3.2.0';
+const CACHE_NAME = 'sweta-v3.3.0';
+const DB_NAME = 'sweta-push-db';
+const STORE_NAME = 'pending-messages';
 
 const STATIC_ASSETS = [
     './',
@@ -24,7 +26,7 @@ const STATIC_ASSETS = [
 // =====================================================
 
 self.addEventListener('install', event => {
-    console.log('🔧 SW: Installing v3.0.0...');
+    console.log('🔧 SW: Installing v3.3.0...');
     event.waitUntil(
         caches.open(CACHE_NAME)
             .then(cache => cache.addAll(STATIC_ASSETS))
@@ -99,6 +101,33 @@ self.addEventListener('fetch', event => {
 // Push Event - Handle incoming push notifications
 // =====================================================
 
+// IndexedDB helpers for storing messages when app is closed
+function openDB() {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, 1);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => resolve(request.result);
+        request.onupgradeneeded = (event) => {
+            const db = event.target.result;
+            if (!db.objectStoreNames.contains(STORE_NAME)) {
+                db.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true });
+            }
+        };
+    });
+}
+
+function savePendingMessage(message) {
+    return openDB().then(db => {
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE_NAME, 'readwrite');
+            const store = tx.objectStore(STORE_NAME);
+            store.add(message);
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        });
+    });
+}
+
 self.addEventListener('push', event => {
     console.log('📬 SW: Push received');
     
@@ -135,20 +164,29 @@ self.addEventListener('push', event => {
         }
     };
     
+    // Save the message to IndexedDB so it appears in chat when app opens
+    const pendingMessage = {
+        text: data.body,
+        sender: 'bot',
+        timestamp: new Date().toISOString(),
+        type: data.type
+    };
+    
     event.waitUntil(
-        self.registration.showNotification(data.title, options)
-            .then(() => {
-                // Notify the app if it's open
-                return self.clients.matchAll({ type: 'window' });
-            })
-            .then(clients => {
-                clients.forEach(client => {
-                    client.postMessage({
-                        type: 'PUSH_RECEIVED',
-                        payload: data
-                    });
+        Promise.all([
+            self.registration.showNotification(data.title, options),
+            savePendingMessage(pendingMessage)
+        ]).then(() => {
+            // Also try to notify app if it's open
+            return self.clients.matchAll({ type: 'window' });
+        }).then(clients => {
+            clients.forEach(client => {
+                client.postMessage({
+                    type: 'PUSH_RECEIVED',
+                    payload: data
                 });
-            })
+            });
+        })
     );
 });
 
@@ -195,11 +233,51 @@ self.addEventListener('notificationclose', event => {
 // Message Event - Communication with main app
 // =====================================================
 
+function getPendingMessages() {
+    return openDB().then(db => {
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE_NAME, 'readonly');
+            const store = tx.objectStore(STORE_NAME);
+            const request = store.getAll();
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+    });
+}
+
+function clearPendingMessages() {
+    return openDB().then(db => {
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE_NAME, 'readwrite');
+            const store = tx.objectStore(STORE_NAME);
+            store.clear();
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        });
+    });
+}
+
 self.addEventListener('message', event => {
     console.log('📨 SW: Message received:', event.data);
     
     if (event.data && event.data.type === 'SKIP_WAITING') {
         self.skipWaiting();
+    }
+    
+    if (event.data && event.data.type === 'GET_PENDING_MESSAGES') {
+        event.waitUntil(
+            getPendingMessages().then(messages => {
+                console.log('📬 SW: Returning', messages.length, 'pending messages');
+                event.source.postMessage({
+                    type: 'PENDING_MESSAGES',
+                    messages: messages
+                });
+                // Clear after sending
+                return clearPendingMessages();
+            }).catch(err => {
+                console.error('Error getting pending messages:', err);
+            })
+        );
     }
 });
 
