@@ -260,59 +260,85 @@ function triggerScheduledNotifications() {
   return { processed: subscriptions.length, results: results };
 }
 
+function isPrimaryUser(userName) {
+  // Check if user is Anji (case-insensitive)
+  return userName && userName.toLowerCase().trim() === 'anji';
+}
+
+function getMessageForUser(userName, type) {
+  const isAnji = isPrimaryUser(userName);
+
+  const messages = {
+    sunday: isAnji
+      ? 'Happy Sunday! Enjoy your day off! 💜'
+      : 'Happy Sunday! Enjoy your day off! 🌟',
+    morning: isAnji
+      ? 'Good morning! ☀️ Time to start tracking your day!'
+      : 'Good morning! ☀️ Ready to start your productive day?',
+    hourly1: isAnji
+      ? 'What have you been working on? ⏰'
+      : 'Check-in time! What have you been working on? ⏰',
+    hourly2: isAnji
+      ? 'Time for a check-in! What did you accomplish? 💜'
+      : 'Time for a check-in! What have you accomplished? 💼'
+  };
+
+  return messages[type] || messages.hourly1;
+}
+
 function shouldSendNotification(sub) {
   // Get current time in user's timezone
   const now = new Date();
   const options = { timeZone: sub.timezone, hour: '2-digit', minute: '2-digit', hour12: false };
   const timeStr = now.toLocaleTimeString('en-US', options);
   const [hours, minutes] = timeStr.split(':').map(Number);
-  
+
   const dayOptions = { timeZone: sub.timezone, weekday: 'short' };
   const day = now.toLocaleDateString('en-US', dayOptions);
-  
+
   // Sunday - only noon message
   if (day === 'Sun') {
     if (hours === 12 && minutes < 15) {
-      return { send: true, type: 'sunday', message: 'Happy Sunday! Enjoy your day off! 💜' };
+      return { send: true, type: 'sunday', message: getMessageForUser(sub.userName, 'sunday') };
     }
     return { send: false, reason: 'Sunday, not noon' };
   }
-  
+
   // Parse working hours
   const [startHour, startMin] = sub.startTime.split(':').map(Number);
   const [endHour, endMin] = sub.endTime.split(':').map(Number);
-  
+
   const currentMins = hours * 60 + minutes;
   const startMins = startHour * 60 + startMin;
   const endMins = endHour * 60 + endMin;
-  
+
   // Outside working hours
   if (currentMins < startMins || currentMins > endMins) {
     return { send: false, reason: 'Outside working hours' };
   }
-  
+
   // Morning message (within first 15 mins of start time)
   if (currentMins >= startMins && currentMins < startMins + 15) {
-    return { send: true, type: 'morning', message: 'Good morning! ☀️ Time to start tracking your day!' };
+    return { send: true, type: 'morning', message: getMessageForUser(sub.userName, 'morning') };
   }
-  
+
   // Hourly check-in (every interval minutes from start)
   const timeSinceStart = currentMins - startMins;
   const interval = sub.interval || 60;
-  
+
   // Check if we're within 5 minutes of an interval mark
   const intervalMark = Math.floor(timeSinceStart / interval) * interval;
   const nextMark = intervalMark + interval;
-  
+
   if (timeSinceStart >= nextMark - 2 && timeSinceStart <= nextMark + 2) {
-    return { send: true, type: 'hourly', message: 'What have you been working on? ⏰' };
+    return { send: true, type: 'hourly', message: getMessageForUser(sub.userName, 'hourly1') };
   }
-  
+
   // Check for interval alignment (within 5 min window)
   if (timeSinceStart > 0 && timeSinceStart % interval <= 5) {
-    return { send: true, type: 'hourly', message: 'Time for a check-in! What did you accomplish? 💜' };
+    return { send: true, type: 'hourly', message: getMessageForUser(sub.userName, 'hourly2') };
   }
-  
+
   return { send: false, reason: 'Not at interval mark' };
 }
 
