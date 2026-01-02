@@ -994,7 +994,10 @@
             document.getElementById('setupPanel').classList.remove('show');
             document.getElementById('mainContainer').style.display = 'flex';
             
-            addBotMessage(`안녕하세요 ${state.userName}! 💜 I'm SWETA! I'll help you track your work. 화이팅! 💪\n\nPlease tap the notification banner to enable push notifications for reminders even when the app is closed!`);
+            const welcomeMsg = isPrimaryUser(state.userName)
+                ? `안녕하세요 ${state.userName}! 💜 I'm SWETA! I'll help you track your work. 화이팅! 💪\n\nPlease tap the notification banner to enable push notifications for reminders even when the app is closed!`
+                : `Hello ${state.userName}! 🌟 I'm SWETA! I'll help you track your work and keep you productive. 💼\n\nPlease tap the notification banner to enable push notifications for reminders even when the app is closed!`;
+            addBotMessage(welcomeMsg);
             
             // Show banner after setup
             subscriptionCheckComplete = true;
@@ -1435,7 +1438,10 @@
                 appJustOpened = false;
                 
                 if (state.chatHistory.length === 0) {
-                    addBotMessage(`안녕하세요 ${state.userName}! 💜 I'm SWETA! 화이팅! 💪`);
+                    const initialMsg = isPrimaryUser(state.userName)
+                        ? `안녕하세요 ${state.userName}! 💜 I'm SWETA! 화이팅! 💪`
+                        : `Hello ${state.userName}! 🌟 I'm SWETA! Let's get productive! 💼`;
+                    addBotMessage(initialMsg);
                     return;
                 }
                 
@@ -1447,24 +1453,29 @@
                 
                 if (day === 0) {
                     if (hours >= 12 && shouldTriggerDaily('sunday')) sendScheduledMessage('sunday');
-                    else addBotMessage(`Welcome back, ${state.userName}! 💜 Enjoy your Sunday!`);
+                    else addBotMessage(getMessageForUser(state.userName, 'welcomeSunday'));
                     return;
                 }
-                
+
                 if (currentTime < startTime || currentTime > endTime) {
-                    addBotMessage(`Welcome back, ${state.userName}! 💜 Outside working hours. Relax! 😊`);
+                    addBotMessage(getMessageForUser(state.userName, 'welcomeAfterHours'));
                     return;
                 }
-                
+
                 if (minsSinceLastCheck >= state.interval - 2 || !lastCheckToday) {
                     state.ignoredCount++;
                     state.lastCheckTime = now.toISOString();
                     saveState();
-                    addBotMessage(state.ignoredCount >= 3 
-                        ? `⚠️ Welcome back ${state.userName}! ${state.ignoredCount} missed check-ins! What have you been up to? 📋`
-                        : `Welcome back, ${state.userName}! 💜 What have you been working on?`);
+                    if (state.ignoredCount >= 3) {
+                        addBotMessage(getMessageForUser(state.userName, 'welcomeWarning').replace('{count}', state.ignoredCount));
+                    } else {
+                        addBotMessage(getMessageForUser(state.userName, 'welcomeRegular'));
+                    }
                 } else {
-                    addBotMessage(`Welcome back, ${state.userName}! 💜`);
+                    const simpleWelcome = isPrimaryUser(state.userName)
+                        ? `Welcome back, ${state.userName}! 💜`
+                        : `Welcome back, ${state.userName}! 🌟`;
+                    addBotMessage(simpleWelcome);
                 }
                 return;
             }
@@ -1515,23 +1526,67 @@
             return false;
         }
 
+        function isPrimaryUser(userName) {
+            // Check if user is Anji (case-insensitive)
+            return userName && userName.toLowerCase().trim() === 'anji';
+        }
+
+        function getMessageForUser(userName, type) {
+            const isAnji = isPrimaryUser(userName);
+
+            const messages = {
+                morning: isAnji
+                    ? `☀️ Good morning ${userName}! Hope you have a productive day! 🌸 Anything from last night or this morning to document? 📝`
+                    : `☀️ Good morning ${userName}! Ready to start your productive day? 📋`,
+                hourly1: isAnji
+                    ? `⏰ Check-in time, ${userName}! What have you been up to?`
+                    : `⏰ Check-in time, ${userName}! What have you been working on?`,
+                hourly2: isAnji
+                    ? `💜 Hourly reminder! What did you accomplish?`
+                    : `💼 Hourly reminder! What have you accomplished?`,
+                hourlyWarning: `⚠️ Hey ${userName}! {count} missed check-ins! Please document your work! 📋`,
+                sunday: isAnji
+                    ? `🌟 Happy Sunday ${userName}! Enjoy your day off! Give Ishan a kiss for me! 💜`
+                    : `🌟 Happy Sunday ${userName}! Enjoy your day off! 🌟`,
+                welcomeSunday: isAnji
+                    ? `Welcome back, ${userName}! 💜 Enjoy your Sunday!`
+                    : `Welcome back, ${userName}! 🌟 Enjoy your Sunday!`,
+                welcomeAfterHours: isAnji
+                    ? `Welcome back, ${userName}! 💜 Outside working hours. Relax! 😊`
+                    : `Welcome back, ${userName}! 🌟 Outside working hours. Relax! 😊`,
+                welcomeRegular: isAnji
+                    ? `Welcome back, ${userName}! 💜 What have you been working on?`
+                    : `Welcome back, ${userName}! What have you been working on? 💼`,
+                welcomeWarning: isAnji
+                    ? `⚠️ Welcome back ${userName}! {count} missed check-ins! What have you been up to? 📋`
+                    : `⚠️ Welcome back ${userName}! {count} missed check-ins! What have you been working on? 📋`
+            };
+
+            return messages[type] || '';
+        }
+
         async function sendScheduledMessage(type) {
             const now = new Date();
             let message = '';
 
             switch (type) {
                 case 'morning':
-                    message = `☀️ Good morning ${state.userName}! Hope you have a productive day! 🌸 Anything from last night or this morning to document? 📝`;
+                    message = getMessageForUser(state.userName, 'morning');
                     break;
                 case 'hourly':
                     state.ignoredCount++;
                     state.lastCheckTime = now.toISOString();
-                    message = state.ignoredCount >= 3
-                        ? `⚠️ Hey ${state.userName}! ${state.ignoredCount} missed check-ins! Please document your work! 📋`
-                        : [`⏰ Check-in time, ${state.userName}! What have you been up to?`, `💜 Hourly reminder! What did you accomplish?`][Math.floor(Math.random() * 2)];
+                    if (state.ignoredCount >= 3) {
+                        message = getMessageForUser(state.userName, 'hourlyWarning').replace('{count}', state.ignoredCount);
+                    } else {
+                        message = [
+                            getMessageForUser(state.userName, 'hourly1'),
+                            getMessageForUser(state.userName, 'hourly2')
+                        ][Math.floor(Math.random() * 2)];
+                    }
                     break;
                 case 'sunday':
-                    message = `🌟 Happy Sunday ${state.userName}! Enjoy your day off! Give Ishan a kiss for me! 💜`;
+                    message = getMessageForUser(state.userName, 'sunday');
                     break;
                 case 'summary':
                     const taskList = state.todayTasks.map(t => `• ${t.task} (${t.timeSlot}${t.duration ? ', ' + formatDuration(t.duration) : ''})`).join('\n');
