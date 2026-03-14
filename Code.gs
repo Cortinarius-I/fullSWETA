@@ -1,6 +1,6 @@
 // =====================================================
-// SWETA Google Apps Script v3.0.0
-// With Push Notification Support
+// SWETA Google Apps Script v3.1.0
+// With Push Notification Support + Invoice
 // =====================================================
 
 // =====================================================
@@ -18,7 +18,7 @@ function doPost(e) {
   try {
     const data = JSON.parse(e.postData.contents);
     const action = data.action;
-    
+
     switch (action) {
       case 'createSheet':
         return jsonResponse(createUserSheet(data.userName));
@@ -34,6 +34,8 @@ function doPost(e) {
         return jsonResponse(getTasks(data.userName, data.date));
       case 'sendTestPush':
         return jsonResponse(sendTestPush(data));
+      case 'sendInvoiceEmail':
+        return jsonResponse(sendInvoiceEmail(data));
       default:
         return jsonResponse({ error: 'Unknown action' });
     }
@@ -44,13 +46,16 @@ function doPost(e) {
 
 function doGet(e) {
   const action = e.parameter.action;
-  
+
   if (action === 'triggerNotifications') {
-    // Called by external cron or manual trigger
     return jsonResponse(triggerScheduledNotifications());
   }
-  
-  return jsonResponse({ status: 'SWETA API v3.0.0', message: 'Use POST for actions' });
+
+  if (action === 'getTasksInRange') {
+    return jsonResponse(getTasksInRange(e.parameter.userName, e.parameter.startDate, e.parameter.endDate));
+  }
+
+  return jsonResponse({ status: 'SWETA API v3.1.0', message: 'Use POST for actions' });
 }
 
 function jsonResponse(data) {
@@ -66,33 +71,29 @@ function jsonResponse(data) {
 function getOrCreateSheet(sheetName) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName(sheetName);
-  
+
   if (!sheet) {
     sheet = ss.insertSheet(sheetName);
   }
-  
+
   return sheet;
 }
 
 function createUserSheet(userName) {
   const sanitizedName = userName.replace(/[^a-zA-Z0-9 ]/g, '').substring(0, 30);
   const sheet = getOrCreateSheet(sanitizedName);
-  
-  // Check if headers exist
+
   const firstCell = sheet.getRange('A1').getValue();
   if (!firstCell) {
-    // Set up headers
     const headers = ['Timestamp', 'Date', 'Time Slot', 'Work Done', 'Duration (min)', 'Logged At'];
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-    
-    // Format header row
+
     const headerRange = sheet.getRange(1, 1, 1, headers.length);
     headerRange.setBackground('#ff6b9d');
     headerRange.setFontColor('#ffffff');
     headerRange.setFontWeight('bold');
     sheet.setFrozenRows(1);
-    
-    // Set column widths
+
     sheet.setColumnWidth(1, 180);
     sheet.setColumnWidth(2, 100);
     sheet.setColumnWidth(3, 150);
@@ -100,7 +101,7 @@ function createUserSheet(userName) {
     sheet.setColumnWidth(5, 100);
     sheet.setColumnWidth(6, 100);
   }
-  
+
   return { success: true, sheetName: sanitizedName };
 }
 
@@ -111,22 +112,18 @@ function createUserSheet(userName) {
 function logWork(data) {
   const sanitizedName = data.userName.replace(/[^a-zA-Z0-9 ]/g, '').substring(0, 30);
   const sheet = getOrCreateSheet(sanitizedName);
-  
-  // Check if this is a duration update
+
   if (data.duration > 0) {
-    // Look for the last row with same work and no duration
     const lastRow = sheet.getLastRow();
     if (lastRow > 1) {
       const lastRowData = sheet.getRange(lastRow, 1, 1, 6).getValues()[0];
       if (lastRowData[3] === data.workDone && !lastRowData[4]) {
-        // Update duration
         sheet.getRange(lastRow, 5).setValue(data.duration);
         return { success: true, updated: true };
       }
     }
   }
-  
-  // Add new row
+
   const row = [
     data.timestamp,
     data.date,
@@ -135,7 +132,7 @@ function logWork(data) {
     data.duration || '',
     data.loggedAt
   ];
-  
+
   sheet.appendRow(row);
   return { success: true, added: true };
 }
@@ -146,8 +143,7 @@ function logWork(data) {
 
 function saveSubscription(data) {
   const subsSheet = getOrCreateSheet('_Subscriptions');
-  
-  // Set up headers if needed
+
   const firstCell = subsSheet.getRange('A1').getValue();
   if (!firstCell) {
     const headers = ['User Name', 'Subscription', 'Start Time', 'End Time', 'Interval', 'Timezone', 'Updated At'];
@@ -155,19 +151,18 @@ function saveSubscription(data) {
     subsSheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
     subsSheet.setFrozenRows(1);
   }
-  
-  // Check if user already has a subscription
+
   const dataRange = subsSheet.getDataRange();
   const values = dataRange.getValues();
   let existingRow = -1;
-  
+
   for (let i = 1; i < values.length; i++) {
     if (values[i][0] === data.userName) {
       existingRow = i + 1;
       break;
     }
   }
-  
+
   const settings = data.settings || {};
   const rowData = [
     data.userName,
@@ -178,13 +173,13 @@ function saveSubscription(data) {
     settings.timezone || 'Asia/Kolkata',
     new Date().toISOString()
   ];
-  
+
   if (existingRow > 0) {
     subsSheet.getRange(existingRow, 1, 1, rowData.length).setValues([rowData]);
   } else {
     subsSheet.appendRow(rowData);
   }
-  
+
   return { success: true };
 }
 
@@ -192,29 +187,29 @@ function removeSubscription(userName) {
   const subsSheet = getOrCreateSheet('_Subscriptions');
   const dataRange = subsSheet.getDataRange();
   const values = dataRange.getValues();
-  
+
   for (let i = 1; i < values.length; i++) {
     if (values[i][0] === userName) {
       subsSheet.deleteRow(i + 1);
       return { success: true, removed: true };
     }
   }
-  
+
   return { success: false, message: 'Subscription not found' };
 }
 
 function getAllSubscriptions() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const subsSheet = ss.getSheetByName('_Subscriptions');
-  
+
   if (!subsSheet) {
     return [];
   }
-  
+
   const dataRange = subsSheet.getDataRange();
   const values = dataRange.getValues();
   const subscriptions = [];
-  
+
   for (let i = 1; i < values.length; i++) {
     const row = values[i];
     if (row[0] && row[1]) {
@@ -228,7 +223,7 @@ function getAllSubscriptions() {
       });
     }
   }
-  
+
   return subscriptions;
 }
 
@@ -239,14 +234,12 @@ function getAllSubscriptions() {
 function triggerScheduledNotifications() {
   const subscriptions = getAllSubscriptions();
   const results = [];
-  
+
   for (const sub of subscriptions) {
     try {
-      // Check if it's time to send notification for this user
       const shouldSend = shouldSendNotification(sub);
-      
+
       if (shouldSend.send) {
-        // Call Cloudflare Worker to send push notification
         const response = sendPushNotification(sub, shouldSend.type, shouldSend.message);
         results.push({ user: sub.userName, type: shouldSend.type, sent: true });
       } else {
@@ -256,38 +249,11 @@ function triggerScheduledNotifications() {
       results.push({ user: sub.userName, error: error.message });
     }
   }
-  
+
   return { processed: subscriptions.length, results: results };
 }
 
-function isPrimaryUser(userName) {
-  // Check if user is Anji (case-insensitive)
-  return userName && userName.toLowerCase().trim() === 'anji';
-}
-
-function getMessageForUser(userName, type) {
-  const isAnji = isPrimaryUser(userName);
-
-  const messages = {
-    sunday: isAnji
-      ? 'Happy Sunday! Enjoy your day off! 💜'
-      : 'Happy Sunday! Enjoy your day off! 🌟',
-    morning: isAnji
-      ? 'Good morning! ☀️ Time to start tracking your day!'
-      : 'Good morning! ☀️ Ready to start your productive day?',
-    hourly1: isAnji
-      ? 'What have you been working on? ⏰'
-      : 'Check-in time! What have you been working on? ⏰',
-    hourly2: isAnji
-      ? 'Time for a check-in! What did you accomplish? 💜'
-      : 'Time for a check-in! What have you accomplished? 💼'
-  };
-
-  return messages[type] || messages.hourly1;
-}
-
 function shouldSendNotification(sub) {
-  // Get current time in user's timezone
   const now = new Date();
   const options = { timeZone: sub.timezone, hour: '2-digit', minute: '2-digit', hour12: false };
   const timeStr = now.toLocaleTimeString('en-US', options);
@@ -296,10 +262,12 @@ function shouldSendNotification(sub) {
   const dayOptions = { timeZone: sub.timezone, weekday: 'short' };
   const day = now.toLocaleDateString('en-US', dayOptions);
 
+  const name = sub.userName || 'Anji';
+
   // Sunday - only noon message
   if (day === 'Sun') {
     if (hours === 12 && minutes < 15) {
-      return { send: true, type: 'sunday', message: getMessageForUser(sub.userName, 'sunday') };
+      return { send: true, type: 'sunday', message: `🌟 Happy Sunday ${name}! Enjoy your day off! Give Ishan a kiss for me! 💜` };
     }
     return { send: false, reason: 'Sunday, not noon' };
   }
@@ -319,24 +287,24 @@ function shouldSendNotification(sub) {
 
   // Morning message (within first 15 mins of start time)
   if (currentMins >= startMins && currentMins < startMins + 15) {
-    return { send: true, type: 'morning', message: getMessageForUser(sub.userName, 'morning') };
+    return { send: true, type: 'morning', message: `☀️ Good morning ${name}! Hope you have a productive day! 🌸 Anything from last night or this morning to document? 📝` };
   }
 
   // Hourly check-in (every interval minutes from start)
   const timeSinceStart = currentMins - startMins;
   const interval = sub.interval || 60;
 
-  // Check if we're within 5 minutes of an interval mark
+  // Check if we're within 2 minutes of an interval mark
   const intervalMark = Math.floor(timeSinceStart / interval) * interval;
   const nextMark = intervalMark + interval;
 
   if (timeSinceStart >= nextMark - 2 && timeSinceStart <= nextMark + 2) {
-    return { send: true, type: 'hourly', message: getMessageForUser(sub.userName, 'hourly1') };
+    return { send: true, type: 'hourly', message: `⏰ Check-in time, ${name}! What have you been up to?` };
   }
 
   // Check for interval alignment (within 5 min window)
   if (timeSinceStart > 0 && timeSinceStart % interval <= 5) {
-    return { send: true, type: 'hourly', message: getMessageForUser(sub.userName, 'hourly2') };
+    return { send: true, type: 'hourly', message: `💜 Hourly reminder! What did you accomplish?` };
   }
 
   return { send: false, reason: 'Not at interval mark' };
@@ -351,14 +319,14 @@ function sendPushNotification(sub, type, message) {
       type: type
     }
   };
-  
+
   const options = {
     method: 'POST',
     contentType: 'application/json',
     payload: JSON.stringify(payload),
     muteHttpExceptions: true
   };
-  
+
   const response = UrlFetchApp.fetch(CLOUDFLARE_WORKER_URL + '/send', options);
   return JSON.parse(response.getContentText());
 }
@@ -371,42 +339,41 @@ function getStats(userName) {
   const sanitizedName = userName.replace(/[^a-zA-Z0-9 ]/g, '').substring(0, 30);
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(sanitizedName);
-  
+
   if (!sheet) {
     return { todayMinutes: 0, monthlyMinutes: 0 };
   }
-  
+
   const data = sheet.getDataRange().getValues();
   const today = new Date().toLocaleDateString('en-IN');
   const thisMonth = new Date().getMonth();
   const thisYear = new Date().getFullYear();
-  
+
   let todayMinutes = 0;
   let monthlyMinutes = 0;
-  
+
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
     const duration = parseInt(row[4]) || 0;
     const date = row[1];
-    
-    // Parse date (DD/MM/YYYY format)
+
     if (date) {
       const parts = date.split('/');
       if (parts.length === 3) {
         const rowMonth = parseInt(parts[1]) - 1;
         const rowYear = parseInt(parts[2]);
-        
+
         if (date === today) {
           todayMinutes += duration;
         }
-        
+
         if (rowMonth === thisMonth && rowYear === thisYear) {
           monthlyMinutes += duration;
         }
       }
     }
   }
-  
+
   return { todayMinutes, monthlyMinutes };
 }
 
@@ -414,14 +381,14 @@ function getTasks(userName, date) {
   const sanitizedName = userName.replace(/[^a-zA-Z0-9 ]/g, '').substring(0, 30);
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(sanitizedName);
-  
+
   if (!sheet) {
     return { tasks: [] };
   }
-  
+
   const data = sheet.getDataRange().getValues();
   const tasks = [];
-  
+
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
     if (row[1] === date) {
@@ -432,8 +399,90 @@ function getTasks(userName, date) {
       });
     }
   }
-  
+
   return { tasks };
+}
+
+// =====================================================
+// Invoice: Get tasks in a date range (deduped)
+// =====================================================
+
+function getTasksInRange(userName, startDate, endDate) {
+  const sanitizedName = (userName || '').replace(/[^a-zA-Z0-9 ]/g, '').substring(0, 30);
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(sanitizedName);
+
+  if (!sheet) return { tasks: [] };
+
+  function parseIndianDate(dateStr) {
+    if (!dateStr) return null;
+    const str = String(dateStr).trim();
+    const parts = str.split('/');
+    if (parts.length !== 3) return null;
+    return new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+  }
+
+  const start = startDate ? parseIndianDate(startDate) : null;
+  const end = endDate ? parseIndianDate(endDate) : null;
+  if (end) end.setHours(23, 59, 59, 999);
+
+  const data = sheet.getDataRange().getValues();
+  const seen = new Set();
+  const tasks = [];
+
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const workDone = String(row[3] || '').trim();
+    if (!workDone) continue;
+
+    const rowDate = parseIndianDate(row[1]);
+    if (start && rowDate && rowDate < start) continue;
+    if (end && rowDate && rowDate > end) continue;
+
+    if (!seen.has(workDone)) {
+      seen.add(workDone);
+      tasks.push({
+        date: String(row[1]),
+        timeSlot: String(row[2] || ''),
+        workDone: workDone,
+        duration: row[4]
+      });
+    }
+  }
+
+  return { tasks };
+}
+
+// =====================================================
+// Invoice: Send PDF via email
+// =====================================================
+
+function sendInvoiceEmail(data) {
+  const toEmail = data.email;
+  const subject = data.subject || 'Invoice from Anjali Ramesh';
+  const body = data.body || 'Please find the attached invoice.';
+  const pdfBase64 = data.pdfBase64;
+  const fileName = data.fileName || 'invoice.pdf';
+
+  if (!toEmail) return { success: false, error: 'No email address provided' };
+  if (!pdfBase64) return { success: false, error: 'No PDF data provided' };
+
+  try {
+    const pdfBlob = Utilities.newBlob(
+      Utilities.base64Decode(pdfBase64),
+      'application/pdf',
+      fileName
+    );
+
+    GmailApp.sendEmail(toEmail, subject, body, {
+      attachments: [pdfBlob],
+      name: 'Anjali Ramesh'
+    });
+
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
 }
 
 // =====================================================
@@ -441,25 +490,22 @@ function getTasks(userName, date) {
 // =====================================================
 
 function setupHourlyTrigger() {
-  // Delete existing triggers first
   const triggers = ScriptApp.getProjectTriggers();
   for (const trigger of triggers) {
     if (trigger.getHandlerFunction() === 'runScheduledCheck') {
       ScriptApp.deleteTrigger(trigger);
     }
   }
-  
-  // Create new trigger - runs every 15 minutes
+
   ScriptApp.newTrigger('runScheduledCheck')
     .timeBased()
     .everyMinutes(15)
     .create();
-  
+
   return { success: true, message: 'Trigger created to run every 15 minutes' };
 }
 
 function runScheduledCheck() {
-  // This function is called by the time-based trigger
   console.log('Running scheduled check at', new Date().toISOString());
   const result = triggerScheduledNotifications();
   console.log('Result:', JSON.stringify(result));
@@ -474,7 +520,7 @@ function sendTestPush(data) {
   const subscription = JSON.parse(data.subscription);
   const testNum = data.testNum || 1;
   const timestamp = data.timestamp || new Date().toLocaleTimeString();
-  
+
   const payload = {
     subscription: subscription,
     notification: {
@@ -483,14 +529,14 @@ function sendTestPush(data) {
       type: 'test'
     }
   };
-  
+
   const options = {
     method: 'POST',
     contentType: 'application/json',
     payload: JSON.stringify(payload),
     muteHttpExceptions: true
   };
-  
+
   try {
     const response = UrlFetchApp.fetch(CLOUDFLARE_WORKER_URL + '/send', options);
     const result = JSON.parse(response.getContentText());
@@ -508,15 +554,15 @@ function sendTestPush(data) {
 
 function testSendNotification() {
   const subscriptions = getAllSubscriptions();
-  
+
   if (subscriptions.length === 0) {
     console.log('No subscriptions found');
     return;
   }
-  
+
   const sub = subscriptions[0];
   console.log('Testing notification for:', sub.userName);
-  
+
   const result = sendPushNotification(sub, 'test', 'This is a test notification from SWETA! 🧪');
   console.log('Result:', JSON.stringify(result));
 }

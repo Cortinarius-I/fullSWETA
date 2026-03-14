@@ -361,6 +361,32 @@
         }
         .notif-banner.show { display: block; }
 
+        .invoice-toolbar {
+            background: rgba(255,255,255,0.95);
+            padding: 8px 12px;
+            display: none;
+            gap: 6px;
+            border-bottom: 1px solid rgba(255,107,157,0.2);
+            flex-shrink: 0;
+        }
+        .invoice-toolbar.show { display: flex; }
+        .invoice-btn {
+            flex: 1;
+            padding: 8px 4px;
+            border: none;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            font-family: 'Quicksand', sans-serif;
+            cursor: pointer;
+            background: linear-gradient(135deg, #a29bfe 0%, #6c5ce7 100%);
+            color: white;
+            text-align: center;
+            line-height: 1.3;
+            transition: opacity 0.2s;
+        }
+        .invoice-btn:active { opacity: 0.7; }
+
         @media (max-width: 480px) {
             body { padding: 0; }
             .container { border-radius: 0; height: 100vh; height: 100dvh; max-height: none; border: none; }
@@ -373,6 +399,8 @@
             .container { border-radius: 0; height: 100vh; height: 100dvh; max-height: none; border: none; }
         }
     </style>
+    <!-- jsPDF for invoice generation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 </head>
 <body>
     <!-- Setup Panel -->
@@ -510,6 +538,24 @@
             </div>
         </div>
 
+        <div class="divider">~ ♡ Invoice Settings ♡ ~</div>
+        <div class="form-group">
+            <label>Monthly Rate (₹)</label>
+            <input type="number" class="form-input" id="configMonthlyRate" placeholder="e.g. 74250" min="0">
+        </div>
+        <div class="form-group">
+            <label>Invoice Recipient Email</label>
+            <input type="email" class="form-input" id="configInvoiceEmail" placeholder="recipient@example.com">
+        </div>
+        <div class="form-group">
+            <label>Next Invoice Number</label>
+            <input type="number" class="form-input" id="configInvoiceNumber" value="1" min="1">
+        </div>
+        <div class="form-group">
+            <label>Invoice Period Start Date <small style="color:#b388ff">(DD/MM/YYYY - tasks since this date)</small></label>
+            <input type="text" class="form-input" id="configLastInvoiceDate" placeholder="e.g. 01/02/2026">
+        </div>
+
         <button class="btn btn-primary" onclick="saveSettings()">💾 Save Settings</button>
         <button class="btn btn-danger" onclick="clearAllData()">🗑️ Clear All Data</button>
     </div>
@@ -546,6 +592,12 @@
             <span id="currentTime"></span>
         </div>
 
+        <div class="invoice-toolbar" id="invoiceToolbar">
+            <button class="invoice-btn" onclick="generateAndPreviewInvoice()">📄 Generate<br>Invoice</button>
+            <button class="invoice-btn" onclick="sendInvoiceViaEmail()">📧 Email<br>Invoice</button>
+            <button class="invoice-btn" onclick="downloadInvoice()">⬇️ Download<br>Invoice</button>
+        </div>
+
         <div class="chat-container" id="chatContainer"></div>
 
         <div class="typing-indicator" id="typingIndicator">
@@ -577,6 +629,7 @@
             targetHours: 175,
             chatHistory: [],
             todayTasks: [],
+            taskHistory: [],
             monthlyMinutes: 0,
             todayMinutes: 0,
             ignoredCount: 0,
@@ -589,7 +642,12 @@
             pendingTask: null,
             isOnline: navigator.onLine,
             swRegistration: null,
-            pushSubscription: null
+            pushSubscription: null,
+            // Invoice fields
+            monthlyRate: 0,
+            invoiceEmail: '',
+            invoiceNumber: 1,
+            lastInvoiceDate: ''
         };
 
         let appJustOpened = true;
@@ -620,6 +678,7 @@
                 loadChatHistory();
                 startScheduler();
                 updateStats();
+                document.getElementById('invoiceToolbar').classList.add('show');
                 
                 // Check subscription FIRST, then show banner based on result
                 await checkPushSubscription();
@@ -994,15 +1053,13 @@
             document.getElementById('setupPanel').classList.remove('show');
             document.getElementById('mainContainer').style.display = 'flex';
             
-            const welcomeMsg = isPrimaryUser(state.userName)
-                ? `안녕하세요 ${state.userName}! 💜 I'm SWETA! I'll help you track your work. 화이팅! 💪\n\nPlease tap the notification banner to enable push notifications for reminders even when the app is closed!`
-                : `Hello ${state.userName}! 🌟 I'm SWETA! I'll help you track your work and keep you productive. 💼\n\nPlease tap the notification banner to enable push notifications for reminders even when the app is closed!`;
-            addBotMessage(welcomeMsg);
+            addBotMessage(`안녕하세요 ${state.userName}! 💜 I'm SWETA! I'll help you track your work. 화이팅! 💪\n\nPlease tap the notification banner to enable push notifications for reminders even when the app is closed!`);
             
-            // Show banner after setup
+            // Show banner and invoice toolbar after setup
             subscriptionCheckComplete = true;
             showNotificationBannerIfNeeded();
-            
+            document.getElementById('invoiceToolbar').classList.add('show');
+
             startScheduler();
         }
 
@@ -1017,6 +1074,16 @@
             document.getElementById('configInterval').value = state.interval;
             document.getElementById('configScriptUrl').value = state.scriptUrl;
             document.getElementById('configTargetHours').value = state.targetHours;
+            document.getElementById('configMonthlyRate').value = state.monthlyRate || '';
+            document.getElementById('configInvoiceEmail').value = state.invoiceEmail || '';
+            document.getElementById('configInvoiceNumber').value = state.invoiceNumber || 1;
+            // Display lastInvoiceDate as DD/MM/YYYY for editing
+            if (state.lastInvoiceDate) {
+                const d = new Date(state.lastInvoiceDate);
+                document.getElementById('configLastInvoiceDate').value = d.toLocaleDateString('en-IN');
+            } else {
+                document.getElementById('configLastInvoiceDate').value = '';
+            }
             updateStats();
             checkNotificationPermission();
             checkPushSubscription();
@@ -1036,6 +1103,20 @@
             state.interval = parseInt(document.getElementById('configInterval').value) || 60;
             state.scriptUrl = document.getElementById('configScriptUrl').value.trim();
             state.targetHours = parseInt(document.getElementById('configTargetHours').value) || 175;
+            state.monthlyRate = parseFloat(document.getElementById('configMonthlyRate').value) || 0;
+            state.invoiceEmail = document.getElementById('configInvoiceEmail').value.trim();
+            state.invoiceNumber = parseInt(document.getElementById('configInvoiceNumber').value) || 1;
+            // Parse lastInvoiceDate from DD/MM/YYYY
+            const rawDate = document.getElementById('configLastInvoiceDate').value.trim();
+            if (rawDate) {
+                const parts = rawDate.split('/');
+                if (parts.length === 3) {
+                    const d = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+                    state.lastInvoiceDate = d.toISOString();
+                }
+            } else {
+                state.lastInvoiceDate = '';
+            }
             
             saveState();
             
@@ -1072,6 +1153,7 @@
                 targetHours: state.targetHours,
                 chatHistory: state.chatHistory.slice(-200),
                 todayTasks: state.todayTasks,
+                taskHistory: (state.taskHistory || []).slice(-2000),
                 monthlyMinutes: state.monthlyMinutes,
                 todayMinutes: state.todayMinutes,
                 ignoredCount: state.ignoredCount,
@@ -1079,7 +1161,11 @@
                 lastSummaryTime: state.lastSummaryTime,
                 lastDailyStatsTime: state.lastDailyStatsTime,
                 lastWeeklyReminder: state.lastWeeklyReminder,
-                isSetupComplete: state.isSetupComplete
+                isSetupComplete: state.isSetupComplete,
+                monthlyRate: state.monthlyRate,
+                invoiceEmail: state.invoiceEmail,
+                invoiceNumber: state.invoiceNumber,
+                lastInvoiceDate: state.lastInvoiceDate
             }));
         }
 
@@ -1268,10 +1354,18 @@
             
             const timeSlot = getCurrentTimeSlot();
             await logWorkToSheet(message, timeSlot, 0);
-            
+
             state.pendingTask = { message, timeSlot };
             state.awaitingDuration = true;
             state.todayTasks.push({ task: message, timeSlot, duration: 0 });
+            // Also store in persistent taskHistory for invoice generation
+            if (!state.taskHistory) state.taskHistory = [];
+            state.taskHistory.push({
+                workDone: message,
+                timeSlot,
+                date: new Date().toLocaleDateString('en-IN'),
+                loggedAt: new Date().toISOString()
+            });
             saveState();
             
             addBotMessage(`대박! Got it! 📝 "${message}" logged for ${timeSlot}. How long did that take? (e.g., "30 min", "1h 30m")`);
@@ -1438,27 +1532,24 @@
                 appJustOpened = false;
                 
                 if (state.chatHistory.length === 0) {
-                    const initialMsg = isPrimaryUser(state.userName)
-                        ? `안녕하세요 ${state.userName}! 💜 I'm SWETA! 화이팅! 💪`
-                        : `Hello ${state.userName}! 🌟 I'm SWETA! Let's get productive! 💼`;
-                    addBotMessage(initialMsg);
+                    addBotMessage(`안녕하세요 ${state.userName}! 💜 I'm SWETA! 화이팅! 💪`);
                     return;
                 }
-                
+
                 // Don't send welcome back if the last message was already a welcome back
                 if (wasLastMessageWelcomeBack()) {
                     console.log('⏭️ Skipping welcome back - last message was already welcome back');
                     return;
                 }
-                
+
                 if (day === 0) {
                     if (hours >= 12 && shouldTriggerDaily('sunday')) sendScheduledMessage('sunday');
-                    else addBotMessage(getMessageForUser(state.userName, 'welcomeSunday'));
+                    else addBotMessage(`Welcome back, ${state.userName}! 💜 Enjoy your Sunday!`);
                     return;
                 }
 
                 if (currentTime < startTime || currentTime > endTime) {
-                    addBotMessage(getMessageForUser(state.userName, 'welcomeAfterHours'));
+                    addBotMessage(`Welcome back, ${state.userName}! 💜 Outside working hours. Relax! 😊`);
                     return;
                 }
 
@@ -1467,15 +1558,12 @@
                     state.lastCheckTime = now.toISOString();
                     saveState();
                     if (state.ignoredCount >= 3) {
-                        addBotMessage(getMessageForUser(state.userName, 'welcomeWarning').replace('{count}', state.ignoredCount));
+                        addBotMessage(`⚠️ Welcome back ${state.userName}! ${state.ignoredCount} missed check-ins! What have you been up to? 📋`);
                     } else {
-                        addBotMessage(getMessageForUser(state.userName, 'welcomeRegular'));
+                        addBotMessage(`Welcome back, ${state.userName}! 💜 What have you been working on?`);
                     }
                 } else {
-                    const simpleWelcome = isPrimaryUser(state.userName)
-                        ? `Welcome back, ${state.userName}! 💜`
-                        : `Welcome back, ${state.userName}! 🌟`;
-                    addBotMessage(simpleWelcome);
+                    addBotMessage(`Welcome back, ${state.userName}! 💜`);
                 }
                 return;
             }
@@ -1526,67 +1614,28 @@
             return false;
         }
 
-        function isPrimaryUser(userName) {
-            // Check if user is Anji (case-insensitive)
-            return userName && userName.toLowerCase().trim() === 'anji';
-        }
-
-        function getMessageForUser(userName, type) {
-            const isAnji = isPrimaryUser(userName);
-
-            const messages = {
-                morning: isAnji
-                    ? `☀️ Good morning ${userName}! Hope you have a productive day! 🌸 Anything from last night or this morning to document? 📝`
-                    : `☀️ Good morning ${userName}! Ready to start your productive day? 📋`,
-                hourly1: isAnji
-                    ? `⏰ Check-in time, ${userName}! What have you been up to?`
-                    : `⏰ Check-in time, ${userName}! What have you been working on?`,
-                hourly2: isAnji
-                    ? `💜 Hourly reminder! What did you accomplish?`
-                    : `💼 Hourly reminder! What have you accomplished?`,
-                hourlyWarning: `⚠️ Hey ${userName}! {count} missed check-ins! Please document your work! 📋`,
-                sunday: isAnji
-                    ? `🌟 Happy Sunday ${userName}! Enjoy your day off! Give Ishan a kiss for me! 💜`
-                    : `🌟 Happy Sunday ${userName}! Enjoy your day off! 🌟`,
-                welcomeSunday: isAnji
-                    ? `Welcome back, ${userName}! 💜 Enjoy your Sunday!`
-                    : `Welcome back, ${userName}! 🌟 Enjoy your Sunday!`,
-                welcomeAfterHours: isAnji
-                    ? `Welcome back, ${userName}! 💜 Outside working hours. Relax! 😊`
-                    : `Welcome back, ${userName}! 🌟 Outside working hours. Relax! 😊`,
-                welcomeRegular: isAnji
-                    ? `Welcome back, ${userName}! 💜 What have you been working on?`
-                    : `Welcome back, ${userName}! What have you been working on? 💼`,
-                welcomeWarning: isAnji
-                    ? `⚠️ Welcome back ${userName}! {count} missed check-ins! What have you been up to? 📋`
-                    : `⚠️ Welcome back ${userName}! {count} missed check-ins! What have you been working on? 📋`
-            };
-
-            return messages[type] || '';
-        }
-
         async function sendScheduledMessage(type) {
             const now = new Date();
             let message = '';
 
             switch (type) {
                 case 'morning':
-                    message = getMessageForUser(state.userName, 'morning');
+                    message = `☀️ Good morning ${state.userName}! Hope you have a productive day! 🌸 Anything from last night or this morning to document? 📝`;
                     break;
                 case 'hourly':
                     state.ignoredCount++;
                     state.lastCheckTime = now.toISOString();
                     if (state.ignoredCount >= 3) {
-                        message = getMessageForUser(state.userName, 'hourlyWarning').replace('{count}', state.ignoredCount);
+                        message = `⚠️ Hey ${state.userName}! ${state.ignoredCount} missed check-ins! Please document your work! 📋`;
                     } else {
                         message = [
-                            getMessageForUser(state.userName, 'hourly1'),
-                            getMessageForUser(state.userName, 'hourly2')
+                            `⏰ Check-in time, ${state.userName}! What have you been up to?`,
+                            `💜 Hourly reminder! What did you accomplish?`
                         ][Math.floor(Math.random() * 2)];
                     }
                     break;
                 case 'sunday':
-                    message = getMessageForUser(state.userName, 'sunday');
+                    message = `🌟 Happy Sunday ${state.userName}! Enjoy your day off! Give Ishan a kiss for me! 💜`;
                     break;
                 case 'summary':
                     const taskList = state.todayTasks.map(t => `• ${t.task} (${t.timeSlot}${t.duration ? ', ' + formatDuration(t.duration) : ''})`).join('\n');
@@ -1608,6 +1657,389 @@
 
             addBotMessage(message);
             saveState();
+        }
+
+        // =====================================================
+        // Invoice Generation
+        // =====================================================
+
+        // Fetch tasks since last invoice date from server (GET) or fall back to local taskHistory
+        async function getInvoiceTasks() {
+            const today = new Date();
+            const lastInvDate = state.lastInvoiceDate
+                ? new Date(state.lastInvoiceDate)
+                : new Date(today.getFullYear(), today.getMonth(), 1);
+
+            const startDate = lastInvDate.toLocaleDateString('en-IN');
+            const endDate = today.toLocaleDateString('en-IN');
+
+            if (state.scriptUrl) {
+                try {
+                    const url = `${state.scriptUrl}?action=getTasksInRange&userName=${encodeURIComponent(state.userName)}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`;
+                    const resp = await fetch(url, { redirect: 'follow' });
+                    const data = await resp.json();
+                    if (data.tasks && data.tasks.length > 0) {
+                        return data.tasks;
+                    }
+                } catch (e) {
+                    console.log('Server task fetch failed, using local data:', e.message);
+                }
+            }
+
+            // Fallback: local taskHistory
+            const history = state.taskHistory || [];
+            return history.filter(t => {
+                if (!t.date) return true;
+                const parts = t.date.split('/');
+                if (parts.length !== 3) return true;
+                const taskDate = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+                return taskDate >= lastInvDate && taskDate <= today;
+            });
+        }
+
+        function numberToWords(num) {
+            if (!num || num <= 0) return 'Zero Rupees Only';
+            const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
+                'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen',
+                'Seventeen', 'Eighteen', 'Nineteen'];
+            const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+
+            function convert(n) {
+                if (n === 0) return '';
+                if (n < 20) return ones[n] + ' ';
+                if (n < 100) return tens[Math.floor(n / 10)] + (n % 10 ? ' ' + ones[n % 10] + ' ' : ' ');
+                if (n < 1000) return ones[Math.floor(n / 100)] + ' Hundred ' + convert(n % 100);
+                if (n < 100000) return convert(Math.floor(n / 1000)) + 'Thousand ' + convert(n % 1000);
+                if (n < 10000000) return convert(Math.floor(n / 100000)) + 'Lakh ' + convert(n % 100000);
+                return convert(Math.floor(n / 10000000)) + 'Crore ' + convert(n % 10000000);
+            }
+
+            const intPart = Math.floor(num);
+            const decPart = Math.round((num - intPart) * 100);
+            let result = convert(intPart).trim().replace(/\s+/g, ' ') + ' Rupees';
+            if (decPart > 0) result += ' and ' + convert(decPart).trim().replace(/\s+/g, ' ') + ' Paise';
+            return result + ' Only';
+        }
+
+        async function generateInvoicePDF() {
+            if (typeof window.jspdf === 'undefined') {
+                addSystemMessage('⚠️ PDF library not loaded. Please check your connection and try again.');
+                return null;
+            }
+
+            addSystemMessage('📊 Fetching tasks...');
+            let tasks = [];
+            try { tasks = await getInvoiceTasks(); } catch (e) { console.error(e); }
+
+            // Deduplicate
+            const seen = new Set();
+            const uniqueTasks = [];
+            tasks.forEach(t => {
+                const key = (t.workDone || String(t)).trim();
+                if (key && !seen.has(key)) { seen.add(key); uniqueTasks.push(key); }
+            });
+
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+            const pw = doc.internal.pageSize.getWidth();
+            const ml = 15, mr = 15;
+            const cw = pw - ml - mr; // 180mm
+            let y = 12;
+
+            const R = (x, y, w, h, s) => doc.rect(x, y, w, h, s || 'S');
+            const L = (x1, y1, x2, y2) => doc.line(x1, y1, x2, y2);
+            const T = (t, x, y, o) => { if (t !== undefined && t !== null) doc.text(String(t), x, y, o || {}); };
+            const F = (sz, st) => { doc.setFont('helvetica', st || 'normal'); doc.setFontSize(sz); };
+
+            // ── TITLE ──
+            F(12, 'bold');
+            T('INVOICE', pw / 2, y, { align: 'center' });
+            y += 4;
+
+            // ── SENDER + INVOICE# BOX ──
+            const sH = 40;
+            R(ml, y, cw, sH);
+
+            // Right sub-box for Invoice# and Date
+            const rbX = ml + cw * 0.56, rbW = cw * 0.44;
+            const hbY = y + sH * 0.28, hbH = sH * 0.6;
+            doc.setFillColor(220, 220, 220);
+            R(rbX, hbY, rbW / 2, hbH / 2, 'FD');
+            R(rbX + rbW / 2, hbY, rbW / 2, hbH / 2, 'FD');
+            doc.setFillColor(255, 255, 255);
+            R(rbX, hbY + hbH / 2, rbW / 2, hbH / 2);
+            R(rbX + rbW / 2, hbY + hbH / 2, rbW / 2, hbH / 2);
+
+            F(7.5, 'bold');
+            T('INVOICE #', rbX + rbW / 4, hbY + 4, { align: 'center' });
+            T('DATE', rbX + rbW * 3 / 4, hbY + 4, { align: 'center' });
+
+            F(9, 'normal');
+            T(state.invoiceNumber || 1, rbX + rbW / 4, hbY + hbH * 0.77, { align: 'center' });
+            const today = new Date();
+            const dateStr = today.toLocaleDateString('en-US', { day: 'numeric', month: 'long', year: 'numeric' });
+            F(7, 'normal');
+            T(dateStr, rbX + rbW * 3 / 4, hbY + hbH * 0.77, { align: 'center' });
+
+            // Sender details
+            const senderRows = [
+                ['Your Name', state.userName || 'Anjali'],
+                ['Your Address Line 1', '101, Vijaya Heritage'],
+                ['Your Address Line 2', '11th Road, Chembur'],
+                ['Your Address Line 3', 'Mumbai - 400071'],
+                ['Contact No.:', '8104959546'],
+                ['Email Id :', 'anjali@adhyayan.asia'],
+            ];
+            let sy = y + 6;
+            senderRows.forEach(([lbl, val]) => {
+                F(8, 'normal'); T(lbl, ml + 2, sy);
+                F(8, 'normal'); T(val, ml + 40, sy);
+                sy += 5.3;
+            });
+            y += sH;
+
+            // ── BILL TO ──
+            const btH = 46;
+            R(ml, y, cw * 0.58, btH);
+            doc.setFillColor(220, 220, 220);
+            R(ml + 3, y + 2, 32, 6, 'FD');
+            doc.setFillColor(255, 255, 255);
+            F(8, 'bold'); T('BILL TO', ml + 3 + 16, y + 6.5, { align: 'center' });
+            F(8.5, 'bold'); T('Adhyayan Quality Education Services Pvt. Ltd.', ml + 2, y + 15);
+            F(8, 'normal');
+            const btLines = [
+                'A - 17, Floor - 01, Royal Industrial Estate,',
+                'Sewree Wadala Road No. 26,',
+                'Wadala, Mumbai 400031.',
+                'Maharashtra.',
+                'Contact No.: 91-97731 87331'
+            ];
+            let by = y + 21;
+            btLines.forEach(l => { T(l, ml + 2, by); by += 4.5; });
+            y += btH;
+
+            // ── TABLE HEADER ──
+            const c1 = cw * 0.44, c2 = cw * 0.13, c3 = cw * 0.13, c4 = cw * 0.15, c5 = cw * 0.15;
+            const thH = 12;
+            doc.setFillColor(220, 220, 220);
+            R(ml, y, cw, thH, 'FD');
+            doc.setFillColor(255, 255, 255);
+            R(ml, y, c1, thH); R(ml + c1, y, c2, thH); R(ml + c1 + c2, y, c3, thH);
+            R(ml + c1 + c2 + c3, y, c4, thH); R(ml + c1 + c2 + c3 + c4, y, c5, thH);
+            F(9, 'bold'); T('Description', ml + c1 / 2, y + 7.5, { align: 'center' });
+            F(7.5, 'bold');
+            T('Expected', ml + c1 + c2 / 2, y + 4.5, { align: 'center' });
+            T('working hours', ml + c1 + c2 / 2, y + 9, { align: 'center' });
+            T('Actual working', ml + c1 + c2 + c3 / 2, y + 4.5, { align: 'center' });
+            T('hours', ml + c1 + c2 + c3 / 2, y + 9, { align: 'center' });
+            T('Monthly', ml + c1 + c2 + c3 + c4 / 2, y + 4.5, { align: 'center' });
+            T('amount', ml + c1 + c2 + c3 + c4 / 2, y + 9, { align: 'center' });
+            T('AMOUNT', ml + c1 + c2 + c3 + c4 + c5 / 2, y + 7.5, { align: 'center' });
+            y += thH;
+
+            // ── DATA ROW ──
+            const lastInvDate = state.lastInvoiceDate
+                ? new Date(state.lastInvoiceDate)
+                : new Date(today.getFullYear(), today.getMonth(), 1);
+            const periodStart = lastInvDate.toLocaleDateString('en-IN');
+            const periodEnd = today.toLocaleDateString('en-IN');
+            const invoiceMonthYear = lastInvDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+            const actualHours = Math.round(state.monthlyMinutes / 60 * 10) / 10;
+            const expectedHours = state.targetHours || 195;
+            const monthlyRate = state.monthlyRate || 0;
+            const rateStr = monthlyRate ? monthlyRate.toLocaleString('en-IN') : '';
+
+            // Build description lines
+            const lh = 4.5;
+            const descLines = [
+                { t: 'Professional Fees towards Independent Consultant as ', b: false },
+                { t: '"Programmes Manager"', b: true },
+                { t: `for the month of ${invoiceMonthYear}`, b: false },
+                { t: `(Period: From ${periodStart} to ${periodEnd})`, b: false },
+                { t: '', b: false },
+                { t: `Total Working Hours:  ${actualHours}`, b: true },
+                { t: '', b: false },
+                { t: 'Deliverables:', b: true },
+                ...uniqueTasks.map(task => ({ t: `\u2022 ${task}`, b: false }))
+            ];
+
+            const drH = Math.max(65, descLines.length * lh + 14);
+            R(ml, y, c1, drH); R(ml + c1, y, c2, drH); R(ml + c1 + c2, y, c3, drH);
+            R(ml + c1 + c2 + c3, y, c4, drH); R(ml + c1 + c2 + c3 + c4, y, c5, drH);
+
+            // Render description text - handle line 0+1 as inline
+            let dy = y + 5;
+            let i = 0;
+            while (i < descLines.length) {
+                const item = descLines[i];
+                if (item.t === '') { dy += lh / 2; i++; continue; }
+                // Check if next line should be inline (bold continuation)
+                if (!item.b && i + 1 < descLines.length && descLines[i + 1].b &&
+                    descLines[i + 1].t.startsWith('"')) {
+                    F(8, 'normal');
+                    T(item.t, ml + 2, dy);
+                    const w1 = doc.getTextWidth(item.t);
+                    F(8, 'bold');
+                    T(descLines[i + 1].t, ml + 2 + w1, dy);
+                    i += 2;
+                } else {
+                    F(8, item.b ? 'bold' : 'normal');
+                    // Word-wrap long task names
+                    const wrapped = doc.splitTextToSize(item.t, c1 - 5);
+                    wrapped.forEach((wl, wi) => { if (wi > 0) dy += lh; T(wl, ml + 2, dy); });
+                    i++;
+                }
+                dy += lh;
+            }
+
+            // Values in right columns
+            const midY = y + drH / 2;
+            F(9, 'normal');
+            T(String(expectedHours), ml + c1 + c2 / 2, midY, { align: 'center' });
+            T(String(actualHours), ml + c1 + c2 + c3 / 2, midY, { align: 'center' });
+            T(rateStr, ml + c1 + c2 + c3 + c4 / 2, midY, { align: 'center' });
+            T(rateStr, ml + c1 + c2 + c3 + c4 + c5 / 2, midY, { align: 'center' });
+            y += drH;
+
+            // ── TOTAL ROW ──
+            const totH = 10;
+            R(ml, y, c1 + c2 + c3, totH);
+            R(ml + c1 + c2 + c3, y, c4, totH);
+            R(ml + c1 + c2 + c3 + c4, y, c5, totH);
+            const amtWords = numberToWords(monthlyRate);
+            F(7.5, 'normal');
+            const wrappedWords = doc.splitTextToSize(`Amount In Words: ${amtWords}`, c1 + c2 + c3 - 4);
+            T(wrappedWords[0], ml + 2, y + 6.5);
+            F(9, 'bold'); T('Total -', ml + c1 + c2 + c3 + c4 / 2, y + 6.5, { align: 'center' });
+            F(9, 'normal'); T(rateStr, ml + c1 + c2 + c3 + c4 + c5 / 2, y + 6.5, { align: 'center' });
+            y += totH + 5;
+
+            // ── BANK DETAILS ──
+            const bankH = 52;
+            const bankW = cw * 0.6;
+            R(ml, y, bankW, bankH);
+            R(ml + bankW, y, cw - bankW, bankH);
+            F(9, 'bold'); T('Bank Details :', ml + 2, y + 6);
+            L(ml, y + 8, ml + bankW, y + 8);
+            const bankRows = [
+                ['Name of Account :', 'Anjali Ramesh'],
+                ['Name of Bank :', 'HDFC Bank'],
+                ['Address of Bank Branch :', 'D/33, NDSE/1, South Extension,'],
+                ['', 'New Delhi, Delhi 110049'],
+                ['Bank Account No.:', '50100621854022'],
+                ['Type of Account :', 'Savings'],
+                ['IFSC Code :', 'HDFC0000319'],
+                ['PAN No.', 'EBPPR6073A'],
+            ];
+            let bankY = y + 12;
+            bankRows.forEach(([lbl, val]) => {
+                if (lbl) { F(7.5, 'bold'); T(lbl, ml + 2, bankY); }
+                F(7.5, 'normal'); T(val, ml + 44, bankY);
+                bankY += 4.8;
+            });
+
+            // Signature
+            const sigX = ml + bankW + (cw - bankW) / 2;
+            F(10, 'italic'); T('Anjali Ramesh', sigX, y + bankH - 8, { align: 'center' });
+            L(sigX - 22, y + bankH - 4, sigX + 22, y + bankH - 4);
+
+            return doc;
+        }
+
+        async function generateAndPreviewInvoice() {
+            const today = new Date();
+            const lastInvDate = state.lastInvoiceDate
+                ? new Date(state.lastInvoiceDate)
+                : new Date(today.getFullYear(), today.getMonth(), 1);
+            let tasks = [];
+            try { tasks = await getInvoiceTasks(); } catch (e) {}
+            const seen = new Set();
+            const unique = tasks.filter(t => {
+                const k = (t.workDone || String(t)).trim();
+                return k && !seen.has(k) && seen.add(k);
+            });
+            const period = `${lastInvDate.toLocaleDateString('en-IN')} to ${today.toLocaleDateString('en-IN')}`;
+            const hrs = Math.round(state.monthlyMinutes / 60 * 10) / 10;
+            const rate = state.monthlyRate ? `₹${Number(state.monthlyRate).toLocaleString('en-IN')}` : 'not set (add in Settings)';
+            addSystemMessage(`📋 Invoice Preview\n\nInvoice #${state.invoiceNumber || 1}\nPeriod: ${period}\nHours: ${hrs} / ${state.targetHours || 195} expected\nAmount: ${rate}\nDeliverables: ${unique.length} unique tasks\n\nUse Download or Email to get the PDF!`);
+        }
+
+        async function downloadInvoice() {
+            addSystemMessage('📄 Generating invoice PDF...');
+            try {
+                const doc = await generateInvoicePDF();
+                if (!doc) return;
+                const monthName = (state.lastInvoiceDate ? new Date(state.lastInvoiceDate) : new Date())
+                    .toLocaleDateString('en-US', { month: 'long', year: 'numeric' }).replace(' ', '_');
+                const fileName = `Invoice_${state.invoiceNumber || 1}_${monthName}.pdf`;
+                doc.save(fileName);
+                state.lastInvoiceDate = new Date().toISOString();
+                state.invoiceNumber = (parseInt(state.invoiceNumber) || 1) + 1;
+                saveState();
+                addSystemMessage(`✅ Invoice saved as ${fileName}!`);
+            } catch (e) {
+                addSystemMessage('❌ Failed: ' + e.message);
+                console.error(e);
+            }
+        }
+
+        async function sendInvoiceViaEmail() {
+            if (!state.invoiceEmail && !(navigator.share)) {
+                addSystemMessage('⚠️ Set Invoice Recipient Email in Settings first!');
+                return;
+            }
+            addSystemMessage('📄 Generating invoice...');
+            try {
+                const doc = await generateInvoicePDF();
+                if (!doc) return;
+                const today = new Date();
+                const monthName = (state.lastInvoiceDate ? new Date(state.lastInvoiceDate) : today)
+                    .toLocaleDateString('en-US', { month: 'long', year: 'numeric' }).replace(' ', '_');
+                const fileName = `Invoice_${state.invoiceNumber || 1}_${monthName}.pdf`;
+
+                // Try Web Share API (mobile - lets user pick their email app)
+                const pdfBlob = doc.output('blob');
+                const file = new File([pdfBlob], fileName, { type: 'application/pdf' });
+                if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+                    await navigator.share({
+                        files: [file],
+                        title: `Invoice #${state.invoiceNumber || 1}`,
+                        text: `Invoice for ${monthName.replace('_', ' ')} from ${state.userName || 'Anjali'}`
+                    });
+                    addSystemMessage('📤 Invoice shared!');
+                } else if (state.scriptUrl && state.invoiceEmail) {
+                    // Send via Google Apps Script
+                    addSystemMessage('📧 Sending via email...');
+                    const pdfBase64 = doc.output('datauristring').split(',')[1];
+                    const invoiceMonthYear = (state.lastInvoiceDate ? new Date(state.lastInvoiceDate) : today)
+                        .toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+                    await fetch(state.scriptUrl, {
+                        method: 'POST',
+                        mode: 'no-cors',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            action: 'sendInvoiceEmail',
+                            email: state.invoiceEmail,
+                            subject: `Invoice #${state.invoiceNumber || 1} - ${invoiceMonthYear} - ${state.userName || 'Anjali'}`,
+                            body: `Dear Team,\n\nPlease find attached the invoice for ${invoiceMonthYear}.\n\nAmount: ₹${state.monthlyRate ? Number(state.monthlyRate).toLocaleString('en-IN') : ''}\n\nRegards,\n${state.userName || 'Anjali'}`,
+                            pdfBase64,
+                            fileName
+                        })
+                    });
+                    addSystemMessage(`📧 Invoice sent to ${state.invoiceEmail}!`);
+                } else {
+                    addSystemMessage('⚠️ No sharing available. Using download instead.');
+                    doc.save(fileName);
+                }
+
+                state.lastInvoiceDate = today.toISOString();
+                state.invoiceNumber = (parseInt(state.invoiceNumber) || 1) + 1;
+                saveState();
+            } catch (e) {
+                if (e.name === 'AbortError') { addSystemMessage('ℹ️ Share cancelled.'); return; }
+                addSystemMessage('❌ Failed: ' + e.message);
+                console.error(e);
+            }
         }
 
         // =====================================================
